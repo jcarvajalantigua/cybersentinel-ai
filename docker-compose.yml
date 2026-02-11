@@ -1,0 +1,169 @@
+# ══════════════════════════════════════════════════════
+# CyberSentinel AI v2.0 — Docker Compose
+# Usage: docker compose up -d
+# ══════════════════════════════════════════════════════
+
+services:
+
+  # ── FRONTEND (Next.js Dashboard) ────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── BACKEND (FastAPI) ───────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    env_file: .env
+    depends_on:
+      neo4j:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+      sandbox:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 30s
+    volumes:
+      - backend_data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock  # Phase 3: access sandbox container
+    restart: unless-stopped
+
+  # ── OLLAMA (Local AI) ──────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "127.0.0.1:11434:11434"  # V9: NEVER bind 0.0.0.0 — localhost only
+    environment:
+      - OLLAMA_HOST=0.0.0.0             # Must listen on all interfaces for Docker inter-container networking
+      - OLLAMA_MAX_LOADED_MODELS=1      # V16: Prevent memory exhaustion
+      - OLLAMA_KEEP_ALIVE=5m            # Unload idle models after 5 min
+      # NOTE: External access is blocked by "127.0.0.1:11434:11434" port binding above
+    volumes:
+      - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        limits:
+          memory: 8G    # V3/V16: Prevent OOM from DoS
+          cpus: "4.0"
+    security_opt:
+      - no-new-privileges:true   # V2: Prevent privilege escalation
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+      start_period: 30s
+    restart: unless-stopped
+    # GPU support (uncomment if you have NVIDIA GPU):
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # ── OLLAMA MODEL PULLER (auto-downloads qwen2.5:7b) ──
+  ollama-init:
+    image: curlimages/curl:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: >
+      sh -c "echo 'Pulling qwen2.5:7b model...' &&
+             curl -s http://ollama:11434/api/pull -d '{\"name\":\"qwen2.5:7b\"}' &&
+             echo 'Model ready!'"
+    restart: "no"
+
+  # ── NEO4J (Graph Database) ──────────────────────────
+  neo4j:
+    image: neo4j:5-community
+    ports:
+      - "127.0.0.1:7474:7474"   # Localhost only (was 0.0.0.0 — V9 fix)
+      - "127.0.0.1:7687:7687"   # Localhost only
+    environment:
+      - NEO4J_AUTH=neo4j/cybersentinel2024
+      - NEO4J_PLUGINS=["apoc"]
+      # Security: restrict APOC procedures to safe subset only
+      - NEO4J_dbms_security_procedures_allowlist=apoc.coll.*,apoc.convert.*,apoc.load.json,apoc.load.csv,apoc.meta.*,db.*,dbms.*
+    volumes:
+      - neo4j_data:/data
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: "2.0"
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  # ── SANDBOX (Security Tools) — Phase 3 ─────────────
+  sandbox:
+    build:
+      context: ./sandbox
+      dockerfile: Dockerfile
+    container_name: cybersentinel-v2-sandbox-1
+    restart: unless-stopped
+    # No ports exposed — backend communicates via docker exec
+    # Network access for scans:
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+
+  # ── ELASTICSEARCH (ELK SIEM) — Phase 3 ────────────
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    restart: unless-stopped
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.15.0
+    ports:
+      - "5601:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  ollama_data:
+  neo4j_data:
+  backend_data:
+  elasticsearch_data:
