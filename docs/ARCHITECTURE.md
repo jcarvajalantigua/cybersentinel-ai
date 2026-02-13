@@ -1,4 +1,4 @@
-# 🏗️ CyberSentinel v2.0 — Architecture
+# 🏗️ CyberSentinel v2.0  \\\  Architecture
 
 ## Overview
 
