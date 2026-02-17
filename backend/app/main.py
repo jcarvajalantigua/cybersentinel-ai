@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends
 import logging
 from fastapi.middleware.cors import CORSMiddleware
-from app.core.config import settings, validate_security_settings
+from app.core.config import settings, validate_security_settings, get_cors_origins
 from app.core.auth import require_api_key
 from app.routers import chat, tools, health, graph, knowledge, scan, intel, history, settings as settings_router, threat_feed, export, elk, splunk, wazuh
 
@@ -68,13 +68,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS - allow frontend to connect
+# CORS - configurable origins with restrictive defaults
+cors_origins = get_cors_origins()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=cors_origins,
+    allow_credentials=settings.cors_allow_credentials,
+    allow_methods=settings.cors_allow_methods.split(",") if settings.cors_allow_methods != "*" else ["*"],
+    allow_headers=settings.cors_allow_headers.split(",") if settings.cors_allow_headers != "*" else ["*"],
 )
 
 # Register routers

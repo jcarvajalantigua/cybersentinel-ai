@@ -41,7 +41,14 @@ class Settings(BaseSettings):
     # Defaults to False in development for backwards compatibility.
     api_auth_enabled: bool = False
     api_key: Optional[str] = None
+    admin_api_key: Optional[str] = None  # Optional separate key for admin operations
     allow_plaintext_secret_persistence: bool = False
+    
+    # CORS settings
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"  # Comma-separated list
+    cors_allow_credentials: bool = True
+    cors_allow_methods: str = "*"
+    cors_allow_headers: str = "*"
 
     # ChromaDB
     # Threat Intel Keys
@@ -93,10 +100,46 @@ def validate_security_settings() -> list[str]:
     """Return startup security configuration errors."""
     errors: list[str] = []
 
-    if is_production() and (not settings.secret_key or settings.secret_key == "change-me"):
-        errors.append("SECRET_KEY must be configured and not use defaults in production")
+    # Check for insecure default secrets
+    insecure_defaults = ["change-me", "change-me-to-a-random-string", "replace-with-a-long-random-api-key"]
+    
+    if is_production():
+        # Production requires strong secrets
+        if not settings.secret_key or settings.secret_key in insecure_defaults:
+            errors.append("SECRET_KEY must be configured and not use defaults in production")
+        
+        if settings.api_auth_enabled and not settings.api_key:
+            errors.append("API_AUTH_ENABLED=true requires API_KEY to be set in production")
+        
+        if settings.api_key and settings.api_key in insecure_defaults:
+            errors.append("API_KEY must not use default/placeholder values in production")
+        
+        if settings.neo4j_password in insecure_defaults:
+            errors.append("NEO4J_PASSWORD must not use default/placeholder values in production")
+        
+        # Check CORS in production
+        if "*" in settings.cors_origins:
+            errors.append("CORS_ORIGINS should not use wildcard (*) in production")
+    else:
+        # Even in development, warn about insecure defaults
+        if settings.secret_key in insecure_defaults:
+            errors.append("WARNING: SECRET_KEY is using a default value - change for production")
+        
+        if settings.api_key and settings.api_key in insecure_defaults:
+            errors.append("WARNING: API_KEY is using a default value - change for production")
 
-    if is_production() and settings.api_auth_enabled and not settings.api_key:
-        errors.append("API_AUTH_ENABLED=true requires API_KEY to be set in production")
+    # Check API key strength (if configured)
+    if settings.api_key and len(settings.api_key) < 32:
+        errors.append("API_KEY should be at least 32 characters for security")
+    
+    if settings.admin_api_key and len(settings.admin_api_key) < 32:
+        errors.append("ADMIN_API_KEY should be at least 32 characters for security")
 
     return errors
+
+
+def get_cors_origins() -> list[str]:
+    """Parse CORS origins from comma-separated string."""
+    if not settings.cors_origins:
+        return []
+    return [origin.strip() for origin in settings.cors_origins.split(",") if origin.strip()]

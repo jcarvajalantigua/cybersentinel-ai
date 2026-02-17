@@ -3,10 +3,11 @@ CyberSentinel v2.0 - Settings Router (Phase 3)
 Manage configuration from the UI - API keys, provider, model.
 Changes persist to .env file so they survive container restarts.
 """
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from typing import Optional
 from app.core.config import settings
+from app.core.auth import require_admin_key
 import os
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -173,9 +174,9 @@ async def get_settings():
     }
 
 
-@router.post("/update")
+@router.post("/update", dependencies=[Depends(require_admin_key)])
 async def update_settings(req: UpdateSettings):
-    """Update settings at runtime AND persist to .env file."""
+    """Update settings at runtime AND persist to .env file. Requires admin privileges."""
     updated = []
     env_updates = {}
 
